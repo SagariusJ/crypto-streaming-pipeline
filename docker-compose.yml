@@ -1,0 +1,132 @@
+# Stack local de streaming: Kafka (KRaft) + Kafka UI + Spark + RustFS (S3 local).
+#
+#   docker compose up -d                                   -> levanta Kafka, Kafka UI y RustFS
+#   docker compose --profile check run --rm spark-smoke-test  -> valida Spark + Kafka + S3
+#
+# UIs:  Kafka UI http://localhost:8081   |   RustFS http://localhost:9001/rustfs/console/
+
+x-spark-common: &spark-common
+  build: ./docker/spark
+  image: crypto-streaming/spark:4.2.1
+  environment:
+    # S3A toma las credenciales de estas variables (EnvironmentVariableCredentialsProvider)
+    AWS_ACCESS_KEY_ID: ${S3_LOCAL_ACCESS_KEY:?Define S3_LOCAL_ACCESS_KEY en .env}
+    AWS_SECRET_ACCESS_KEY: ${S3_LOCAL_SECRET_KEY:?Define S3_LOCAL_SECRET_KEY en .env}
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    KAFKA_TOPIC: ${KAFKA_TOPIC:-crypto.trades}
+    LAKE_BUCKET: ${S3_LOCAL_BUCKET:-crypto-lake}
+    PYTHONPATH: /opt/app/src
+  volumes:
+    - ./src:/opt/app/src:ro
+    - ./jobs:/opt/app/jobs:ro
+    - ./conf:/opt/app/conf:ro
+  depends_on:
+    kafka-init:
+      condition: service_completed_successfully
+    s3-init:
+      condition: service_completed_successfully
+
+services:
+  # --- Kafka en modo KRaft: un solo nodo que es broker y controller (sin Zookeeper) ---
+  kafka:
+    image: apache/kafka:4.3.2
+    environment:
+      CLUSTER_ID: crypto-streaming-local-01
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # PLAINTEXT: red interna de Docker | EXTERNAL: desde tu PC (localhost:9094)
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Un solo broker: no hay replicas posibles
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Los topics se crean a proposito (kafka-init), no por un typo en el producer
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    ports:
+      - "9094:9094"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # Crea el topic de trades (idempotente) y termina.
+  kafka-init:
+    image: apache/kafka:4.3.2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+          --topic ${KAFKA_TOPIC:-crypto.trades} --partitions 3 --replication-factor 1 \
+          --config retention.ms=86400000
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic ${KAFKA_TOPIC:-crypto.trades}
+
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "8081:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- RustFS: almacenamiento compatible con S3 para desarrollo local y CI ---
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_LOCAL_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${S3_LOCAL_SECRET_KEY}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    command: ["/data"]
+    ports:
+      - "9000:9000"  # API S3
+      - "9001:9001"  # consola web
+    volumes:
+      - rustfs-data:/data
+    restart: unless-stopped
+
+  # Crea el bucket del data lake local (idempotente) y termina.
+  s3-init:
+    image: amazon/aws-cli:2.31.39
+    depends_on:
+      - rustfs
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_LOCAL_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_LOCAL_SECRET_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for i in $$(seq 1 30); do aws --endpoint-url http://rustfs:9000 s3 ls > /dev/null 2>&1 && break; sleep 1; done
+        aws --endpoint-url http://rustfs:9000 s3 mb s3://${S3_LOCAL_BUCKET:-crypto-lake} 2>/dev/null || true
+        aws --endpoint-url http://rustfs:9000 s3 ls
+
+  # --- Spark: valida que Spark lee Kafka y escribe en S3 (no queda corriendo) ---
+  spark-smoke-test:
+    <<: *spark-common
+    profiles: ["check"]
+    command:
+      - /opt/spark/bin/spark-submit
+      - --properties-file
+      - /opt/app/conf/spark-local.conf
+      - /opt/app/jobs/smoke_test.py
+
+volumes:
+  kafka-data:
+  rustfs-data:

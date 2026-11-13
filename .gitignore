@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Secretos locales (usar .env.example como plantilla)
+.env
+
+# Terraform: el state puede contener datos sensibles y es local
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.*
+infra/**/*.tfvars
+!infra/**/*.tfvars.example
+
+# Spark (checkpoints y metastore si se corre fuera de Docker)
+spark-warehouse/
+metastore_db/
+checkpoints/
+
+# Editor / SO
+.vscode/
+.idea/
+Thumbs.db
