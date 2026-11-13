@@ -60,7 +60,9 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # Crea el topic de trades (idempotente) y termina.
+  # Crea los topics (idempotente) y termina:
+  #   crypto.trades      -> trades validos, key = product_id (orden garantizado por par)
+  #   crypto.trades.dlq  -> mensajes que no pasaron la validacion (dead letter queue)
   kafka-init:
     image: apache/kafka:4.3.2
     depends_on:
@@ -72,7 +74,10 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
           --topic ${KAFKA_TOPIC:-crypto.trades} --partitions 3 --replication-factor 1 \
           --config retention.ms=86400000
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic ${KAFKA_TOPIC:-crypto.trades}
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+          --topic ${KAFKA_TOPIC:-crypto.trades}.dlq --partitions 1 --replication-factor 1 \
+          --config retention.ms=604800000
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
 
   kafka-ui:
     image: kafbat/kafka-ui:v1.5.0
