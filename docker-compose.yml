@@ -8,7 +8,7 @@
 x-spark-common: &spark-common
   build: ./docker/spark
   image: crypto-streaming/spark:4.2.1
-  environment:
+  environment: &spark-env
     # S3A toma las credenciales de estas variables (EnvironmentVariableCredentialsProvider)
     AWS_ACCESS_KEY_ID: ${S3_LOCAL_ACCESS_KEY:?Define S3_LOCAL_ACCESS_KEY en .env}
     AWS_SECRET_ACCESS_KEY: ${S3_LOCAL_SECRET_KEY:?Define S3_LOCAL_SECRET_KEY en .env}
@@ -20,6 +20,9 @@ x-spark-common: &spark-common
     - ./src:/opt/app/src:ro
     - ./jobs:/opt/app/jobs:ro
     - ./conf:/opt/app/conf:ro
+    # Checkpoints de streaming (offsets de Kafka + estado de ventanas/deduplicacion).
+    # En un volumen local y no en S3: S3 no tiene "rename" atomico, que Spark usa al checkpointear.
+    - spark-checkpoints:/opt/app/checkpoints
   depends_on:
     kafka-init:
       condition: service_completed_successfully
@@ -132,6 +135,22 @@ services:
       - /opt/app/conf/spark-local.conf
       - /opt/app/jobs/smoke_test.py
 
+  # --- Spark Structured Streaming: el job principal, corriendo siempre ---
+  spark-streaming:
+    <<: *spark-common
+    command:
+      - /opt/spark/bin/spark-submit
+      - --properties-file
+      - /opt/app/conf/spark-local.conf
+      - /opt/app/src/crypto_stream/stream_processor.py
+    environment:
+      <<: *spark-env
+      TRIGGER_INTERVAL: ${TRIGGER_INTERVAL:-30 seconds}
+    ports:
+      - "4040:4040"  # Spark UI (pestaña "Structured Streaming")
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   rustfs-data:
+  spark-checkpoints:

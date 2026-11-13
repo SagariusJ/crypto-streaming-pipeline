@@ -27,5 +27,8 @@ RUN set -eux; \
     done; \
     rm -rf /tmp/jars /tmp/ivy-cache
 
+# Carpeta de checkpoints propiedad del usuario spark (el volumen de Docker hereda el dueño).
+RUN mkdir -p /opt/app/checkpoints && chown -R spark:spark /opt/app
+
 USER spark
 WORKDIR /opt/app
