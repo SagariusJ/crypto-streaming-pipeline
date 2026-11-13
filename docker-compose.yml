@@ -1,7 +1,8 @@
 # Stack local de streaming: Kafka (KRaft) + Kafka UI + Spark + RustFS (S3 local).
 #
 #   docker compose up -d                                   -> levanta Kafka, Kafka UI y RustFS
-#   docker compose --profile check run --rm spark-smoke-test  -> valida Spark + Kafka + S3
+#   docker compose --profile check run --rm spark-smoke-test  -> valida Spark + Kafka + S3 local
+#   docker compose --profile aws up -d spark-streaming-aws    -> mismo job, escribiendo en AWS S3
 #
 # UIs:  Kafka UI http://localhost:8081   |   RustFS http://localhost:9001/rustfs/console/
 
@@ -27,6 +28,30 @@ x-spark-common: &spark-common
     kafka-init:
       condition: service_completed_successfully
     s3-init:
+      condition: service_completed_successfully
+
+x-spark-aws: &spark-aws
+  image: crypto-streaming/spark:4.2.1
+  environment:
+    # Perfil que asume el rol de minimo privilegio (ver infra/aws/iam.tf)
+    AWS_PROFILE: crypto-pipeline
+    HOME: /home/spark
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    KAFKA_TOPIC: ${KAFKA_TOPIC:-crypto.trades}
+    LAKE_BUCKET: ${AWS_LAKE_BUCKET:?Define AWS_LAKE_BUCKET en .env (output lake_bucket de Terraform)}
+    # Checkpoints separados del entorno local: son dos destinos distintos
+    CHECKPOINT_DIR: /opt/app/checkpoints/aws
+    TRIGGER_INTERVAL: ${TRIGGER_INTERVAL:-30 seconds}
+    PYTHONPATH: /opt/app/src
+  volumes:
+    - ./src:/opt/app/src:ro
+    - ./jobs:/opt/app/jobs:ro
+    - ./conf:/opt/app/conf:ro
+    - spark-checkpoints:/opt/app/checkpoints
+    # Configuracion y cache de la sesion SSO (el SDK la renueva: necesita escritura)
+    - ~/.aws:/home/spark/.aws
+  depends_on:
+    kafka-init:
       condition: service_completed_successfully
 
 services:
@@ -148,6 +173,29 @@ services:
       TRIGGER_INTERVAL: ${TRIGGER_INTERVAL:-30 seconds}
     ports:
       - "4040:4040"  # Spark UI (pestaña "Structured Streaming")
+    restart: unless-stopped
+
+  # --- Variante AWS: mismo job, escribe en S3 real (infra creada con Terraform) ---
+  # Requiere sesion SSO activa:  aws sso login --profile crypto-admin
+  spark-smoke-test-aws:
+    <<: *spark-aws
+    profiles: ["aws"]
+    command:
+      - /opt/spark/bin/spark-submit
+      - --properties-file
+      - /opt/app/conf/spark-aws.conf
+      - /opt/app/jobs/smoke_test.py
+
+  spark-streaming-aws:
+    <<: *spark-aws
+    profiles: ["aws"]
+    command:
+      - /opt/spark/bin/spark-submit
+      - --properties-file
+      - /opt/app/conf/spark-aws.conf
+      - /opt/app/src/crypto_stream/stream_processor.py
+    ports:
+      - "4041:4040"  # Spark UI de la variante AWS
     restart: unless-stopped
 
 volumes:
