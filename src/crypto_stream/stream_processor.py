@@ -19,6 +19,7 @@ import os
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DecimalType, LongType, StringType, StructField, StructType
+from crypto_stream.monitoring import start_monitoring
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ def main() -> None:
 
     spark = SparkSession.builder.appName("crypto-stream-processor").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+    start_monitoring(spark)
 
     kafka_df = (
         spark.readStream.format("kafka")

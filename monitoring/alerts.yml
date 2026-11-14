@@ -1,0 +1,52 @@
+# Reglas de alerta. Se ven en Prometheus -> Alerts (http://localhost:9090/alerts).
+groups:
+  - name: streaming
+    rules:
+      - alert: ProducerDown
+        expr: up{job="producer"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "El producer no responde: no entran trades a Kafka"
+
+      - alert: StreamingQueryDown
+        expr: streaming_query_active == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "La query {{ $labels.query }} de Spark se detuvo"
+
+      - alert: StreamingStalled
+        expr: time() - streaming_last_progress_timestamp_seconds > 180
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "La query {{ $labels.query }} no reporta progreso hace mas de 3 minutos"
+
+      - alert: KafkaLagHigh
+        expr: streaming_offsets_behind_latest > 5000
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.query }} va {{ $value }} mensajes atrasado respecto a Kafka"
+
+      - alert: FallingBehind
+        # Un micro-batch tarda mas que el intervalo de trigger (30 s): Spark no da abasto
+        expr: streaming_batch_duration_seconds > 30
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.query }} tarda {{ $value }} s por micro-batch"
+
+      - alert: DataStale
+        expr: streaming_watermark_delay_seconds{query="trades"} > 600
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Los datos del lake tienen mas de 10 minutos de atraso"
+
+      - alert: InvalidTradesDetected
+        expr: increase(producer_trades_invalid_total[5m]) > 0
+        labels: { severity: info }
+        annotations:
+          summary: "Llegaron trades invalidos: revisar el topic crypto.trades.dlq"

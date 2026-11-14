@@ -1,0 +1,21 @@
+# Prometheus: recolecta metricas cada 15 s y evalua las reglas de alerta.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Job de Spark (local o AWS). El listener de Python expone las metricas en :9108.
+  - job_name: spark-streaming
+    static_configs:
+      - targets: ["spark-streaming:9108"]
+        labels: { target: local }
+      - targets: ["spark-streaming-aws:9108"]
+        labels: { target: aws }
+
+  # El producer corre en tu PC: Docker Desktop lo alcanza en host.docker.internal.
+  - job_name: producer
+    static_configs:
+      - targets: ["host.docker.internal:9109"]

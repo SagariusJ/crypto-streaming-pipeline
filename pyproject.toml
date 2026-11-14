@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "confluent-kafka>=2.16,<3",
+    "prometheus-client>=0.26,<1",
     "websockets>=17,<18",
 ]
 

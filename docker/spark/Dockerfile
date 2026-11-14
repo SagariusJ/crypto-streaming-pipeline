@@ -27,6 +27,9 @@ RUN set -eux; \
     done; \
     rm -rf /tmp/jars /tmp/ivy-cache
 
+# Cliente de Prometheus para el listener de metricas (src/crypto_stream/monitoring.py).
+RUN python3 -m pip install --no-cache-dir prometheus-client==0.26.0
+
 # Carpeta de checkpoints propiedad del usuario spark (el volumen de Docker hereda el dueño).
 RUN mkdir -p /opt/app/checkpoints && chown -R spark:spark /opt/app
 

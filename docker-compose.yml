@@ -5,6 +5,7 @@
 #   docker compose --profile aws up -d spark-streaming-aws    -> mismo job, escribiendo en AWS S3
 #
 # UIs:  Kafka UI http://localhost:8081   |   RustFS http://localhost:9001/rustfs/console/
+#       Spark UI http://localhost:4040   |   Prometheus http://localhost:9090   |   Grafana http://localhost:3000
 
 x-spark-common: &spark-common
   build: ./docker/spark
@@ -198,7 +199,43 @@ services:
       - "4041:4040"  # Spark UI de la variante AWS
     restart: unless-stopped
 
+  # --- Monitoreo: Prometheus recolecta metricas, Grafana las muestra ---
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # para alcanzar el producer que corre en tu PC
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.0.12
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Define GRAFANA_ADMIN_PASSWORD en .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"      # ver el dashboard sin login (solo lectura)
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/streaming.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   rustfs-data:
   spark-checkpoints:
+  prometheus-data:
+  grafana-data:

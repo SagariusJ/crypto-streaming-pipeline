@@ -18,11 +18,14 @@ from decimal import Decimal, InvalidOperation
 
 import websockets
 from confluent_kafka import KafkaError, Message, Producer
+from prometheus_client import REGISTRY, start_http_server
+from prometheus_client.core import CounterMetricFamily
 
 logger = logging.getLogger(__name__)
 
 COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
 STATS_EVERY_SECONDS = 30
+METRICS_PORT = 9109  # Prometheus lee http://localhost:9109/metrics
 
 # Campos que debe traer un trade de Coinbase para que lo aceptemos.
 REQUIRED_FIELDS = ("trade_id", "product_id", "price", "size", "side", "time", "sequence")
@@ -125,6 +128,18 @@ class TradeProducer:
         return self._producer.flush(timeout)
 
 
+class ProducerStatsCollector:
+    """Expone producer.stats a Prometheus como contadores, cada vez que Prometheus consulta."""
+
+    def __init__(self, producer: TradeProducer):
+        self.producer = producer
+
+    def collect(self):
+        for name, value in self.producer.stats.items():
+            # "received" -> producer_trades_received_total
+            yield CounterMetricFamily(f"producer_trades_{name}", f"Trades: {name}", value=value)
+
+
 async def stream_trades(producer: TradeProducer, product_ids: list[str]) -> None:
     """Escucha Coinbase para siempre, reconectando automaticamente si se corta."""
     # "async for ... in connect()" reconecta solo con backoff exponencial ante errores.
@@ -171,6 +186,10 @@ async def main() -> None:
 
     producer = TradeProducer(bootstrap, topic)
     logger.info("Publicando en %s (topic %s)", bootstrap, topic)
+    metrics_port = int(os.environ.get("PRODUCER_METRICS_PORT", METRICS_PORT))
+    REGISTRY.register(ProducerStatsCollector(producer))
+    start_http_server(metrics_port)
+    logger.info("Metricas del producer en :%d/metrics", metrics_port)
 
     # Ctrl+C o "docker stop" (SIGTERM): terminar ordenadamente.
     stop = asyncio.Event()
